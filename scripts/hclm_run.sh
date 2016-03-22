@@ -56,6 +56,8 @@ NPROCS=`wc -l < $PBS_NODEFILE`
 
 #trap '' USR1 USR2
 
+bin/gzero -b 20.0 -l -0.7 -t 0.45 -l -0.15 -t 0.34 -l 0.15 -t 0.34 -l 0.7 -t 0.45
+
 /opt/openmpi/bin/mpirun -x PATH -x LD_LIBRARY_PATH -machinefile $PBS_NODEFILE -np $NPROCS bin/anderson -U 1.0 -b 20.0 -l -0.7 -t 0.45 -l -0.15 -t 0.34 -l 0.15 -t 0.34 -l 0.7 -t 0.45 --calc2pgf --calcgf --wf 64 --coefftol 1e-8 --reducetol 1e-4 > pom-$PBS_JOBID.log 2> pom-err-$PBS_JOBID.log
 
 echo "Script complete."
