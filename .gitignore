@@ -1,0 +1,47 @@
+# Compiled source #
+###################
+*.exe
+*.o
+ 
+# Logs and databases #
+######################
+*.log
+ 
+# OS generated files #
+######################
+.DS_Store
+.DS_Store?
+._*
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Ignore output files (e.g. plots/data)
+######################
+*.h5
+*.eps
+*.png
+*.dat
+
+# Ignore the build, lib and data dirs #
+#################################
+build/*
+lib/*
+dat/*
+bin/*
+doc/*
+log/*
+plots/*
+BKP/*
+
+# Project specific files #
+##########################
+callgrind.out.*
+annot_src.cpp
+gnplErr.txt
+RUN_SCRIPT.sh
+plots/BKP
+tags
