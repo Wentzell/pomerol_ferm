@@ -22,7 +22,7 @@ OPTIMIZEFLAGS := -march=native -O3 #-flto # 					Compiler flags for optimal spee
 DBFLAGS := -O2 -g # 								Compiler flags for debugging
 #OPTIMIZEFLAGS := -xHOST -fp-model fast -lpthread -O3 -openmp -DOPENMP # -opt-prefetch 0 # Compiler flags for optimal speed
 LIB :=  -lmpi -lboost_serialization -lboost_mpi -lpomerol -lmpi_cxx #		Library flags
-INC := -I include # -I/opt/pomerol/include #						Additional include paths
+INC := -I include #-I/opt/pomerol/include #						Additional include paths
 
 #--------------------------------------Targets ------------------------------------------
 
@@ -34,6 +34,9 @@ debug: 	bin/anderson bin/gzero
 
 bin/%: $(SRCDIR)/%.$(SRCEXT) $(HEADERS)
 	@mkdir -p $(BUILDDIR)
+	@mkdir -p bin
+	@mkdir -p log
+	@mkdir -p dat
 	@echo " $(CXX) -o $@ $< $(CFLAGS) $(INC) $(LIB)"; $(CXX) -o $@ $< $(CFLAGS) $(INC) $(LIB)
 
 clean:
