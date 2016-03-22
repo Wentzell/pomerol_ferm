@@ -41,7 +41,7 @@ bin/%: $(SRCDIR)/%.$(SRCEXT) $(HEADERS)
 
 clean:
 	@echo " Cleaning..."; 
-	@echo " $(RM) -r $(BUILDDIR) $(TARGET)"; $(RM) -r $(BUILDDIR) $(TARGET)
+	@echo " $(RM) -r $(BUILDDIR) bin/*"; $(RM) -r $(BUILDDIR) bin/*
 
 .PHONY: clean
 

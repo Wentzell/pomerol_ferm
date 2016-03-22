@@ -257,7 +257,7 @@ int main(int argc, char* argv[])
       /** Knob that controls the caching frequency. */
       Chi4.ReduceInvocationThreshold = 1e5;
       /** Minimal magnitude of the coefficient of a term to take it into account with respect to amount of terms. */
-      Chi4.MultiTermCoefficientTolerance = 1e-14;
+      Chi4.MultiTermCoefficientTolerance = 1e-6;
 
       Chi4.prepareAll(indices4); // find all non-vanishing block connections inside 2pgf
       comm.barrier(); // MPI::BARRIER

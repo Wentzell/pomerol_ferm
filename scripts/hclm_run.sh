@@ -7,7 +7,7 @@
 #PBS -l walltime=720:00:00
 #
 #number of nodes and cores per node
-#PBS -l nodes=1:ppn=12
+#PBS -l nodes=4:ppn=12
 #
 # path/filename for standard output
 #PBS -o $PBS_O_WORKDIR/log/run.log
