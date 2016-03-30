@@ -10,7 +10,7 @@ def run(command):
     output = subprocess.check_output(command, shell=True)
     return output
 
-run('./merge.sh')
+run('./scripts/merge.sh')
 
 # --- Constants
 BETA=10.0
