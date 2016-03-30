@@ -1,4 +1,4 @@
-#!/home/nils/.usr/bin/python
+#!/usr/bin/python
 
 import h5py
 import numpy as np
