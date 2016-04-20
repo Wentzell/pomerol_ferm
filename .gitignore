@@ -45,3 +45,4 @@ gnplErr.txt
 RUN_SCRIPT.sh
 plots/BKP
 tags
+*.pom
