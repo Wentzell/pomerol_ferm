@@ -93,8 +93,8 @@ int main(int argc, char* argv[])
       TCLAP::ValueArg<size_t> wn_arg("","wf","Number of positive fermionic Matsubara Freqs",false,64,"int",cmd);
       TCLAP::SwitchArg gf_arg("","calcgf","Calculate Green's functions",cmd, false);
       TCLAP::SwitchArg twopgf_arg("","calc2pgf","Calculate 2-particle Green's functions",cmd, false);
-      TCLAP::ValueArg<RealType> reduce_tol_arg("","reducetol","Energy resonance resolution in 2pgf",false,1e-4,"RealType",cmd);
-      TCLAP::ValueArg<RealType> coeff_tol_arg("","coefftol","Total weight tolerance",false,1e-8,"RealType",cmd);
+      TCLAP::ValueArg<RealType> reduce_tol_arg("","reducetol","Energy resonance resolution in 2pgf",false,1e-12,"RealType",cmd);
+      TCLAP::ValueArg<RealType> coeff_tol_arg("","coefftol","Total weight tolerance",false,1e-12,"RealType",cmd);
       TCLAP::ValueArg<RealType> e0_arg("e","e0","Energy level of the impurity",false,0.0,"RealType",cmd);
 
       TCLAP::ValueArg<RealType> eta_arg("","eta","Offset from the real axis for Green's function calculation",false,0.05,"RealType",cmd);
@@ -257,7 +257,7 @@ int main(int argc, char* argv[])
       /** Knob that controls the caching frequency. */
       Chi4.ReduceInvocationThreshold = 1e5;
       /** Minimal magnitude of the coefficient of a term to take it into account with respect to amount of terms. */
-      Chi4.MultiTermCoefficientTolerance = 1e-6;
+      Chi4.MultiTermCoefficientTolerance = 1e-12;
 
       Chi4.prepareAll(indices4); // find all non-vanishing block connections inside 2pgf
       comm.barrier(); // MPI::BARRIER

@@ -10,12 +10,16 @@ def run(command):
     output = subprocess.check_output(command, shell=True)
     return output
 
-run('./scripts/merge.sh')
-
 # --- Constants
-BETA=10.0
+p = optparse.OptionParser(usage="usage: %prog [OPTIONS]")
+p.add_option("-b", "--beta", action="store", type="float", dest="beta", default=10.0, help=" Inverse temperature ( default = 10.0 ) " )
+opts, args = p.parse_args()
+
+BETA=opts.beta
 
 print "Filling arrays ..."
+
+run('./scripts/merge.sh')  # Merge pomerol output file if 1010.dat does not yet exist
 
 #data1111 = np.loadtxt("1111.dat")        # Load file into numpy array 
 data1010 = np.loadtxt("1010.dat")        # Load file into numpy array 
