@@ -27,10 +27,10 @@ INC := -I include -I/opt/pomerol/include #						Additional include paths
 #--------------------------------------Targets ------------------------------------------
 
 all: 	CFLAGS += $(OPTIMIZEFLAGS)
-all: 	bin/anderson bin/gzero
+all: 	bin/anderson bin/hubbard2d bin/gzero
 
 debug: 	CFLAGS += $(DBFLAGS)
-debug: 	bin/anderson bin/gzero
+debug: 	bin/anderson bin/hubbard2d bin/gzero
 
 bin/%: $(SRCDIR)/%.$(SRCEXT) $(HEADERS)
 	@mkdir -p $(BUILDDIR)
