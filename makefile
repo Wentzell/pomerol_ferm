@@ -1,12 +1,10 @@
-# MAKEFILE for fRG_O2 Project
-
 #--------------------------------------General------------------------------------------
 CXX 	:= g++ # This is the main compiler
 #CXX 	:= icc # This is the main compiler
 SRCDIR 	:= src
 HEADDIR := include
 BUILDDIR := build
-TARGETS := bin/gzero bin/anderson bin/hubbard2d
+TARGET := bin/run
 
 #--------------------------------------Sources and header files------------------------------------------
 SRCEXT 	:= cpp
@@ -30,32 +28,35 @@ INC := -I include -I/opt/pomerol/include -I/usr/include/hdf5/serial #			Addition
 
 
 #--------------------------------------Targets ------------------------------------------
-run: 	CFLAGS += $(RUNFLAGS)
-run: 	$(TARGETS)
 
-debug: 	CFLAGS += $(DBFLAGS)
-debug: 	$(TARGETS)
-
-prof: 	CFLAGS += $(PROFFLAGS)
-prof: 	$(TARGETS)
-
-bin/anderson: prog/anderson.cpp
-bin/hubbard2d: prog/hubbard2d.cpp
-bin/gzero: prog/gzero.cpp
-bin/dimer: prog/dimer.cpp
-
-bin/%: $(OBJECTS)
+$(TARGET): $(OBJECTS)
+	@echo " Linking..."
 	@mkdir -p bin
 	@mkdir -p dat
-	@echo " $(CXX) $^ -o $@ $(LIB) $(CFLAGS) $(INC)"; $(CXX) $^ -o $@ $(LIB) $(CFLAGS) $(INC)
+	@echo " $(CXX) $^ -o $(TARGET) $(LIB)"; $(CXX) $^ -o $(TARGET) $(LIB)
 
 $(BUILDDIR)/%.o: $(SRCDIR)/%.$(SRCEXT) $(HEADERS)
 	@mkdir -p $(BUILDDIR)
 	@echo " $(CXX) $(CFLAGS) $(INC) -c -o $@ $<"; $(CXX) $(CFLAGS) $(INC) -c -o $@ $<
 
+run: 	CFLAGS += $(RUNFLAGS)
+run: 	$(TARGET)
+
+debug: 	CFLAGS += $(DBFLAGS)
+debug: 	$(TARGET)
+
+prof: 	CFLAGS += $(PROFFLAGS)
+prof: 	$(TARGET)
+
+optimize: CFLAGS += $(OPTIMIZEFLAGS)
+optimize: $(SOURCES) $(HEADERS)
+	@mkdir -p bin
+	@mkdir -p dat
+	$(CXX) $(CFLAGS) $(INC) $(SOURCES) -o $(TARGET) $(LIB)
+	#rm *.o
+
 clean:
 	@echo " Cleaning..."; 
-	@echo " $(RM) -r $(BUILDDIR) $(TARGET)"; $(RM) -r $(BUILDDIR) $(TARGETS)
+	@echo " $(RM) -r $(BUILDDIR) $(TARGET)"; $(RM) -r $(BUILDDIR) $(TARGET)
 
 .PHONY: clean
-
