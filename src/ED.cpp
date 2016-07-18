@@ -71,7 +71,7 @@ int main(int argc, char* argv[])
    boost::mpi::environment env(argc,argv);
    boost::mpi::communicator comm;
 
-   print_section("Hubbard nxn");
+   print_section("Dimer Model");
 
    int size_x, size_y;
    RealType t, mu, U, beta, reduce_tol, coeff_tol;
@@ -89,9 +89,6 @@ int main(int argc, char* argv[])
       TCLAP::ValueArg<RealType> T_arg("T","T","Temperature",true,0.01,"RealType");
       cmd.xorAdd(beta_arg,T_arg);
 
-      TCLAP::ValueArg<size_t> x_arg("x","x","Size over x",false,2,"int",cmd);
-      TCLAP::ValueArg<size_t> y_arg("y","y","Size over y",false,2,"int",cmd);
-
       TCLAP::ValueArg<size_t> wf_arg("","wf","Number of positive fermionic Matsubara Freqs",false,64,"int",cmd);
 
       TCLAP::SwitchArg gf_arg("","calcgf","Calculate Green's functions",cmd, false);
@@ -99,7 +96,7 @@ int main(int argc, char* argv[])
       TCLAP::ValueArg<RealType> reduce_tol_arg("","reducetol","Energy resonance resolution in 2pgf",false,1e-12,"RealType",cmd);
       TCLAP::ValueArg<RealType> coeff_tol_arg("","coefftol","Total weight tolerance",false,1e-12,"RealType",cmd);
 
-      TCLAP::SwitchArg cluster_arg("","cluster","Disable periodic boundrary conditions",cmd, false);
+      cluster = true; 
 
       TCLAP::ValueArg<RealType> eta_arg("","eta","Offset from the real axis for Green's function calculation",false,0.05,"RealType",cmd);
       TCLAP::ValueArg<RealType> hbw_arg("D","hbw","Half-bandwidth. Default = U",false,0.0,"RealType",cmd);
@@ -109,9 +106,9 @@ int main(int argc, char* argv[])
 
       U = U_arg.getValue();
       mu = (mu_arg.isSet()?mu_arg.getValue():U/2);
-      boost::tie(t, beta, calc_gf, calc_2pgf, cluster, reduce_tol, coeff_tol) = boost::make_tuple( t_arg.getValue(), beta_arg.getValue(), 
-	    gf_arg.getValue(), twopgf_arg.getValue(), cluster_arg.getValue(), reduce_tol_arg.getValue(), coeff_tol_arg.getValue());
-      boost::tie(size_x, size_y) = boost::make_tuple(x_arg.getValue(), y_arg.getValue());
+      boost::tie(t, beta, calc_gf, calc_2pgf, reduce_tol, coeff_tol) = boost::make_tuple( t_arg.getValue(), beta_arg.getValue(), 
+	    gf_arg.getValue(), twopgf_arg.getValue(), reduce_tol_arg.getValue(), coeff_tol_arg.getValue());
+      size_x = 2; size_y = 1; 
       boost::tie(wf_max) = boost::make_tuple(wf_arg.getValue());
       boost::tie(eta, hbw, step) = boost::make_tuple(eta_arg.getValue(), (hbw_arg.isSet()?hbw_arg.getValue():2.*U), step_arg.getValue());
       calc_gf = calc_gf || calc_2pgf;
@@ -290,65 +287,33 @@ int main(int argc, char* argv[])
 	 Chi4.MultiTermCoefficientTolerance = 1e-12;
 
 	 Chi4.prepareAll(indices4); // find all non-vanishing block connections inside 2pgf
-	 comm.barrier(); // MPI::BARRIER
+
 	 bool clearTerms = false; // Set if terms are kept in memory NOT YET WORKING
 
 	 // ! The most important routine - actually calculate the 2PGF
 	 Chi4.computeAll(clearTerms, comm, true); 
 
+	 gf_2p_t G2arr( wf_max, L ); 
+
 	 for (auto ind : indices4) { // dump 2PGF into files - loop through 2pgf components
 	    if (!comm.rank()) std::cout << "Saving 2PGF " << ind << std::endl;
-	    std::string ind_str = std::to_string(ind.Index1) + std::to_string(ind.Index2) +std::to_string(ind.Index4) +std::to_string(ind.Index3);
+	    std::string ind_str = std::to_string(ind.Index1 / 2) + std::to_string(ind.Index2 / 2) +std::to_string(ind.Index4 / 2) +std::to_string(ind.Index3 / 2);
 	    const TwoParticleGF &chi = Chi4(ind);
 
-	    { // dispatch and save two-particle GF data - MPI parallelization in first fermionic freq
-
-	       // Master-slave scheme to distribute the first fermionic frequency on different processes
-	       int ROOT = 0;
-	       int ntasks = 2*wf_max;
-
-	       std::unique_ptr<pMPI::MPIMaster> disp;
-
-	       if (comm.rank() == ROOT) { 
-		  DEBUG("Master at " << comm.rank());
-		  disp.reset(new pMPI::MPIMaster(comm,ntasks,true));
-	       };
-	       comm.barrier();
-
-
-	       for (pMPI::MPIWorker worker(comm,ROOT);!worker.is_finished();) {
-		  if (rank == ROOT) disp->order(); 
-		  worker.receive_order(); 
-		  //DEBUG((worker.Status == WorkerTag::Pending));
-		  if (worker.is_working()) { 
-		     // this is what every process executes
-		     auto p = worker.current_job();
-
-		     int w1_index = job_to_ffreq_index(p, wf_max); 
-		     std::cout << "["<<p+1<<"/" << ntasks << "] p" << comm.rank() << " w1_idx = " << w1_index << std::endl;
-
-		     std::ofstream chi_stream ("chi_"+ind_str+"_w1_"+std::to_string(w1_index)+".dat");
-
-		     // Most important part 2 - loop over fermionic frequencies. Consider parallelizing one of the loop
-		     for (int w2_index = -wf_max; w2_index<wf_max; w2_index++) { // loop over second fermionic frequency 
-			for (int w1p_index = -wf_max; w1p_index<wf_max; w1p_index++) { // loop over third fermionic
-			   int w2p_index = w1_index + w2_index - w1p_index;
-			   ComplexType val = chi(I*FMatsubara( w1_index, beta ), I*FMatsubara( w2_index, beta ), I*FMatsubara( w2p_index, beta ));  
-			   chi_stream << std::scientific << std::setprecision(12) 
-			      << w1_index << " " << w2_index << " " << w1p_index << "   " << std::real(val) << " " << std::imag(val) << std::endl;
-			}
-			chi_stream << std::endl;
-		     };
-		     chi_stream.close();
-		     worker.report_job_done(); 
-		  };
-		  if (rank == ROOT) disp->check_workers(); // check if there are free workers 
-	       };
-	       comm.barrier();
-	       if (comm.rank() == ROOT) { disp.release(); DEBUG("Released master"); };
-	    }
+	    for (int w1_index = -wf_max; w1_index<wf_max; w1_index++) // loop over second fermionic frequency 
+	       for (int w2_index = -wf_max; w2_index<wf_max; w2_index++) // loop over second fermionic frequency 
+		  for (int w1p_index = -wf_max; w1p_index<wf_max; w1p_index++) 
+		  { 
+		     int w2p_index = w1_index + w2_index - w1p_index;
+		     G2arr[w1_index][w2_index][w1p_index][0][0][0][ind.Index1 / 2][ind.Index2 / 2][ind.Index4 / 2][ind.Index3 / 2] = chi(I*FMatsubara( w1_index, beta ), I*FMatsubara( w2_index, beta ), I*FMatsubara( w2p_index, beta ));  
+		  }
 	 }
-      };
+
+	 Group group( file.createGroup("/G2") );
+	 write( Giw, group, "" ); 
+	 write( F_Grid( wf_max, 2.0*PI / beta ), group );
+
+      }
    };
 }
 
