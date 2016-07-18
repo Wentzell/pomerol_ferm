@@ -20,7 +20,7 @@
 
 
 /** \file prog/anderson.cpp
- ** \brief Diagonalization of the Hubbard 2d cluster with periodic boundary conditions
+ ** \brief Diagonalization of the Anderson impurity model (1 impurity coupled to a set of non-interacting bath sites)
  **
  ** \author Andrey Antipov (Andrey.E.Antipov@gmail.com)
  */
@@ -71,26 +71,27 @@ int main(int argc, char* argv[])
    boost::mpi::environment env(argc,argv);
    boost::mpi::communicator comm;
 
-   print_section("Hubbard nxn");
+   print_section("ED Impurity solver");
 
-   int size_x, size_y;
-   RealType t, mu, U, beta, reduce_tol, coeff_tol;
-   bool calc_gf, calc_2pgf, cluster; 
+   RealType e0, U, beta, reduce_tol, coeff_tol;
+   bool calc_gf, calc_2pgf;
    int wf_max;
+   size_t L;
    double eta, hbw, step; // for evaluation of GF on real axis 
+
+
+   std::vector<double> levels;
+   std::vector<double> hoppings;
 
    try { // command line parser
       TCLAP::CmdLine cmd("Hubbard nxn diag", ' ', "");
       TCLAP::ValueArg<RealType> U_arg("U","U","Value of U",true,10.0,"RealType",cmd);
-      TCLAP::ValueArg<RealType> mu_arg("","mu","Global chemical potential",false,0.0,"RealType",cmd);
-      TCLAP::ValueArg<RealType> t_arg("t","t","Value of t",false,1.0,"RealType",cmd);
-
       TCLAP::ValueArg<RealType> beta_arg("b","beta","Inverse temperature",true,100.,"RealType");
       TCLAP::ValueArg<RealType> T_arg("T","T","Temperature",true,0.01,"RealType");
       cmd.xorAdd(beta_arg,T_arg);
 
-      TCLAP::ValueArg<size_t> x_arg("x","x","Size over x",false,2,"int",cmd);
-      TCLAP::ValueArg<size_t> y_arg("y","y","Size over y",false,2,"int",cmd);
+      TCLAP::MultiArg<double> level_args("l", "level", "level on auxiliary site", false,"RealType", cmd );
+      TCLAP::MultiArg<double> hopping_args("t", "hopping", "hopping to an auxiliary site", false,"RealType", cmd );
 
       TCLAP::ValueArg<size_t> wf_arg("","wf","Number of positive fermionic Matsubara Freqs",false,64,"int",cmd);
 
@@ -98,8 +99,7 @@ int main(int argc, char* argv[])
       TCLAP::SwitchArg twopgf_arg("","calc2pgf","Calculate 2-particle Green's functions",cmd, false);
       TCLAP::ValueArg<RealType> reduce_tol_arg("","reducetol","Energy resonance resolution in 2pgf",false,1e-12,"RealType",cmd);
       TCLAP::ValueArg<RealType> coeff_tol_arg("","coefftol","Total weight tolerance",false,1e-12,"RealType",cmd);
-
-      TCLAP::SwitchArg cluster_arg("","cluster","Disable periodic boundrary conditions",cmd, false);
+      TCLAP::ValueArg<RealType> e0_arg("e","e0","Energy level of the impurity",false,0.0,"RealType",cmd);
 
       TCLAP::ValueArg<RealType> eta_arg("","eta","Offset from the real axis for Green's function calculation",false,0.05,"RealType",cmd);
       TCLAP::ValueArg<RealType> hbw_arg("D","hbw","Half-bandwidth. Default = U",false,0.0,"RealType",cmd);
@@ -108,57 +108,44 @@ int main(int argc, char* argv[])
       cmd.parse( argc, argv ); // parse arguments
 
       U = U_arg.getValue();
-      mu = (mu_arg.isSet()?mu_arg.getValue():U/2);
-      boost::tie(t, beta, calc_gf, calc_2pgf, cluster, reduce_tol, coeff_tol) = boost::make_tuple( t_arg.getValue(), beta_arg.getValue(), 
-	    gf_arg.getValue(), twopgf_arg.getValue(), cluster_arg.getValue(), reduce_tol_arg.getValue(), coeff_tol_arg.getValue());
-      boost::tie(size_x, size_y) = boost::make_tuple(x_arg.getValue(), y_arg.getValue());
+      e0 = (e0_arg.isSet()?e0_arg.getValue():-U/2.0);
+      boost::tie(beta, calc_gf, calc_2pgf, reduce_tol, coeff_tol) = boost::make_tuple( beta_arg.getValue(), 
+	    gf_arg.getValue(), twopgf_arg.getValue(), reduce_tol_arg.getValue(), coeff_tol_arg.getValue());
       boost::tie(wf_max) = boost::make_tuple(wf_arg.getValue());
       boost::tie(eta, hbw, step) = boost::make_tuple(eta_arg.getValue(), (hbw_arg.isSet()?hbw_arg.getValue():2.*U), step_arg.getValue());
       calc_gf = calc_gf || calc_2pgf;
+
+      levels = level_args.getValue(); 
+      hoppings = hopping_args.getValue();
+
+      if (levels.size() != hoppings.size()) throw (std::logic_error("number of levels != number of hoppings"));
    }
    catch (TCLAP::ArgException &e)  // catch parsing exceptions
    { std::cerr << "error: " << e.error() << " for arg " << e.argId() << std::endl; exit(1);}
    catch (std::exception &e)  // catch standard exceptions
    { std::cerr << "error: " << e.what() << std::endl; exit(1);}
 
-   int L = size_x*size_y;
-   INFO("Diagonalization of " << L << "=" << size_x << "*" << size_y << " sites");
+   L = levels.size();
+   INFO("Diagonalization of 1+" << L << " sites");
+
    Lattice Lat;
 
    /* Add sites */
-   std::vector<std::string> names(L);
-   auto SiteIndexF = [size_x](size_t x, size_t y){return y*size_x + x;};
-   for (size_t y=0; y<size_y; y++)
-      for (size_t x=0; x<size_x; x++)
-      {
-	 int i = SiteIndexF(x,y);
-	 names[i]="S"+std::to_string(i);
-	 Lat.addSite(new Lattice::Site(names[i],1,2));
-      };
+   Lat.addSite(new Lattice::Site("A",1,2)); // Impurity
+   LatticePresets::addCoulombS(&Lat, "A", U, e0);
+
+   std::vector<std::string> names(L); // Bath sites
+   for (size_t i=0; i<L; i++)
+   {
+      std::stringstream s; s << i; 
+      names[i]="b"+s.str();
+      Lat.addSite(new Lattice::Site(names[i],1,2));
+      LatticePresets::addHopping(&Lat, "A", names[i], hoppings[i]);
+      LatticePresets::addLevel(&Lat, names[i], levels[i]);
+   };
 
    INFO("Sites");
    Lat.printSites();
-
-   /* Add hopping */
-   for (size_t x=0; x<size_x; x++) 
-      for (size_t y=0; y<size_y; y++) 
-      {
-	 auto pos = SiteIndexF(x,y);
-	 auto pos_right = SiteIndexF( (x+1) % size_x, y ); 
-	 auto pos_up = SiteIndexF( x, (y+1) % size_y ); 
-
-	 if (x < size_x-1) LatticePresets::addHopping(&Lat, names[pos], names[pos_right], -t);
-	 else if(!cluster) LatticePresets::addHopping(&Lat, names[pos_right], names[pos], -t); // periodicity in x
-	    
-	 if (y < size_y-1) LatticePresets::addHopping(&Lat, names[pos], names[pos_up], -t);
-	 else if(!cluster) LatticePresets::addHopping(&Lat, names[pos_up], names[pos], -t); // periodicity in y
-      }
-
-   // Copy Lattice for non-interacting GF
-   Lattice Lat0( Lat ); 
-
-   /* Add interaction on each site*/
-   for (size_t i=0; i<L; i++) LatticePresets::addCoulombS(&Lat, names[i], U, -mu);
 
    auto rank = comm.rank();
    if (!rank) {
@@ -200,17 +187,18 @@ int main(int argc, char* argv[])
 
    // Register indeces for preparation (f)
    std::set<ParticleIndex> f; // a set of indices to evaluate c and c^+
-   for( int i = 0; i < IndexInfo.getIndexSize(); i++ )
-      f.insert(i);
-
    // Green's function calculation starts here
    FieldOperatorContainer Operators(IndexInfo, S, H); // Create a container for c and c^+ in the eigenstate basis
 
    Operators.prepareAll(f);
    Operators.computeAll(); // evaluate c, c^+ for chosen indices 
 
-   ParticleIndex d0 = IndexInfo.getIndex("S0",0,down); 
-   ParticleIndex u0 = IndexInfo.getIndex("S0",0,up);
+   ParticleIndex d0 = IndexInfo.getIndex("A",0,down); // find the indices of the impurity, i.e. spin up index
+   ParticleIndex u0 = IndexInfo.getIndex("A",0,up);
+
+   // Take only impurity spin up and spin down indices
+   f.insert(u0); 
+   f.insert(d0);
 
    INFO("<N> = " << rho.getAverageOccupancy()); // get average total particle number
    INFO("<H> = " << rho.getAverageEnergy()); // get average energy
@@ -223,21 +211,15 @@ int main(int argc, char* argv[])
       INFO("1-particle Green's functions calc");
       std::set<IndexCombination2> indices2; // a set of pairs of indices to evaluate Green's function
 
-      // Register indeces for 1p Green function
-      for ( int i = 0; i < L; i++ )
-	 for ( int j = 0; j < L; j++ )
-	 {
-	    ParticleIndex ind_i = IndexInfo.getIndex(names[i],0,up);
-	    ParticleIndex ind_j = IndexInfo.getIndex(names[j],0,up);
-	    indices2.insert(IndexCombination2(ind_i,ind_j));
-	 }
+      indices2.insert(IndexCombination2(d0,d0)); // evaluate only G_downdown
+
 
       GFContainer G(IndexInfo,S,H,rho,Operators);
 
       G.prepareAll(indices2); // identify all non-vanishing block connections in the Green's function
       G.computeAll(); // Evaluate all GF terms, i.e. resonances and weights of expressions in Lehmans representation of the Green's function
 
-      gf_1p_t Giw( 4*wf_max, L ); 
+      gf_1p_t Giw( 4*wf_max, 1 ); 
 
       if (!comm.rank()) // dump gf into a file
       {
@@ -263,18 +245,8 @@ int main(int argc, char* argv[])
       if (calc_2pgf) {   
 	 print_section("2-Particle Green's function calc");
 	 std::set<IndexCombination4> indices4; // a set of four indices to evaluate the 2pgf
-	 // 2PGF = <T c c c^+ c^+>      i j k l
-	 for ( int i = 0; i < L; i++ )
-	    for ( int j = 0; j < L; j++ )
-	       for ( int k = 0; k < L; k++ )
-		  for ( int l = 0; l < L; l++ )
-		  {
-		     ParticleIndex ind_i = IndexInfo.getIndex(names[i],0,up);
-		     ParticleIndex ind_j = IndexInfo.getIndex(names[j],0,down);
-		     ParticleIndex ind_k = IndexInfo.getIndex(names[k],0,down);
-		     ParticleIndex ind_l = IndexInfo.getIndex(names[l],0,up);
-		     indices4.insert(IndexCombination4(ind_i, ind_j, ind_k, ind_l));
-		  }
+	 // 2PGF = <T c c c^+ c^+>
+	 indices4.insert(IndexCombination4(u0,d0,d0,u0)); // register 1010 in my notation
 
 	 TwoParticleGFContainer Chi4(IndexInfo,S,H,rho,Operators);
 	 /* Some knobs to make calc faster - the larger the values of tolerances, the faster is calc, but rounding errors may show up. */
