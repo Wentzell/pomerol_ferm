@@ -76,7 +76,7 @@ int main(int argc, char* argv[])
    int size_x, size_y;
    RealType t, mu, U, beta, reduce_tol, coeff_tol;
    bool calc_gf, calc_2pgf, cluster; 
-   unsigned int wf_max;
+   int wf_max;
    double eta, hbw, step; // for evaluation of GF on real axis 
 
    try { // command line parser
@@ -247,7 +247,7 @@ int main(int argc, char* argv[])
 	    const GreensFunction & GF = G(ind2);
 
 	    // Save Matsubara GF on grid
-	    for (int wn = -4*int(wf_max); wn < 4*int(wf_max); wn++)	// Care for spin index!
+	    for (int wn = -4*wf_max; wn < 4*wf_max; wn++)	// Care for spin index!
 	       Giw[wn][0][ind2.Index1 / 2][ind2.Index2 / 2] = GF(I*FMatsubara(wn,beta)); 
 	 }
       }
