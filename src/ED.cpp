@@ -247,10 +247,13 @@ int main(int argc, char* argv[])
       }
 
       H5File file( "output.h5", H5F_ACC_TRUNC );
+      Group grp_par( file.createGroup("/Params"));
+      write( U, grp_par, "UINT" ); 
+      write( beta, grp_par, "BETA" ); 
 
-      Group group( file.createGroup("/Giw") );
-      write( Giw, group, "" ); 
-      write( F_Grid( 4*wf_max, 2.0*PI / beta ), group );
+      Group grp_giw( file.createGroup("/Giw") );
+      write( Giw, grp_giw, "" ); 
+      write( F_Grid( 4*wf_max, 2.0*PI / beta ), grp_giw );
 
       // Start Two-particle GF calculation
 
@@ -306,9 +309,9 @@ int main(int argc, char* argv[])
 		  }
 	 }
 
-	 Group group( file.createGroup("/G2") );
-	 write( G2arr, group, "" ); 
-	 write( F_Grid( wf_max, 2.0*PI / beta ), group );
+	 Group grp_G2( file.createGroup("/G2") );
+	 write( G2arr, grp_G2, "" ); 
+	 write( F_Grid( wf_max, 2.0*PI / beta ), grp_G2 );
 
       }
    }
