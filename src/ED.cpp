@@ -151,9 +151,6 @@ int main(int argc, char* argv[])
 	 else if(!cluster) LatticePresets::addHopping(&Lat, names[pos_up], names[pos], -t); // periodicity in y
       }
 
-   // Copy Lattice for non-interacting GF
-   Lattice Lat0( Lat ); 
-
    /* Add interaction on each site*/
    for (size_t i=0; i<L; i++) LatticePresets::addCoulombS(&Lat, names[i], U, -mu);
 
@@ -296,8 +293,8 @@ int main(int argc, char* argv[])
 	 gf_2p_t G2arr( wf_max, L ); 
 
 	 for (auto ind : indices4) { // dump 2PGF into files - loop through 2pgf components
-	    if (!comm.rank()) std::cout << "Saving 2PGF " << ind << std::endl;
 	    std::string ind_str = std::to_string(ind.Index1 / 2) + std::to_string(ind.Index2 / 2) +std::to_string(ind.Index4 / 2) +std::to_string(ind.Index3 / 2);
+	    if (!comm.rank()) std::cout << "Saving 2PGF " << ind_str << std::endl;
 	    const TwoParticleGF &chi = Chi4(ind);
 
 	    for (int w1_index = -wf_max; w1_index<wf_max; w1_index++) // loop over second fermionic frequency 
@@ -310,11 +307,11 @@ int main(int argc, char* argv[])
 	 }
 
 	 Group group( file.createGroup("/G2") );
-	 write( Giw, group, "" ); 
+	 write( G2arr, group, "" ); 
 	 write( F_Grid( wf_max, 2.0*PI / beta ), group );
 
       }
-   };
+   }
 }
 
 bool compare(ComplexType a, ComplexType b)
