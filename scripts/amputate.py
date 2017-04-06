@@ -90,7 +90,7 @@ reSig = Sig.real
 imSig = Sig.imag
 
 # Create and write to hdf5 file
-print "Writing binary data to full.h5 using single precision and gzip compression"
+print "Writing binary data to final.h5 using single precision and gzip compression"
 fout = h5py.File("final.h5", "w")
 
 Pargrp = fout.create_group("Params")

@@ -61,8 +61,9 @@ vertgrid = f["/Vert/fgrid"]
 
 #--- Helper functions
 def plotSig( use_pl, arr, string ):
-    pl.plot( siggrid, arr[:,0,0,0], 'bx', ms=3, mew=0.2)
-    #pl.xlim([1.2*min(vertgrid),1.2*max(vertgrid)])
+    pl.plot( siggrid, arr[:,0,0,0], 'bx', ms=5, mew=0.5)
+    #pl.xlim([0,30])
+    #pl.ylim([-0.08,0])
     use_pl.set_title(string)
     return
 
@@ -133,32 +134,32 @@ def check_bounds( w1, w2, w1p ):
 def ReVert( w1, w2, w1p, i, j, k, l ):
     if ( not check_bounds( w1, w2, w1p ) ):
             return float('nan')
-    return revert[w1,w2,w1p,0,0,0,0,0,0,0]
+    return revert[w1,w2,w1p,0,0,0,i,j,k,l]
 
 def ImVert( w1, w2, w1p, i, j, k, l ):
     if ( not check_bounds( w1, w2, w1p ) ):
             return float('nan')
-    return imvert[w1,w2,w1p,0,0,0,0,0,0,0]
+    return imvert[w1,w2,w1p,0,0,0,i,j,k,l]
 
 def ReVertUpDown( w1, w2, w1p ):
-    if ( not check_bounds( w1, neg(w2), w1p ) ):
+    if ( not check_bounds( w1, w2, w1p ) ):
             return float('nan')
-    return revert[w1, w2, w1p, 0, 0, 0,0,0,0,0]
+    return revert[w1, w2, w1p, 0, 0, 0, 0, 1, 0, 1]
+    #return revert[w1, w2, w1p, 0, 0, 0, 0, 0, 0, 0]
 
 def ImVertUpDown( w1, w2, w1p ):
-    if ( not check_bounds( w1, neg(w2), w1p ) ):
+    if ( not check_bounds( w1, w2, w1p ) ):
             return float('nan')
-    return imvert[w1, w2, w1p, 0, 0, 0,0,0,0,0]
+    return revert[w1, w2, w1p, 0, 0, 0, 0, 1, 0, 1]
+    #return imvert[w1, w2, w1p, 0, 0, 0, 0, 0, 0, 0]
 
 def ReVertUpUp( w1, w2, w1p ):
-    if ( not check_bounds( w1, w2, w1p ) ):
-            return float('nan')
-    return ReVertUpDown( w1, w2, w1p ) - ReVertUpDown( w2, w1, w1p )
+    return ReVert( w1, w2, w1p, 0, 1, 0, 1 ) - ReVert( w2, w1, w1p, 1, 0, 0, 1 )
+    #return ReVert( w1, w2, w1p, 0, 0, 0, 0 ) - ReVert( w2, w1, w1p, 0, 0, 0, 0 )
 
 def ImVertUpUp( w1, w2, w1p ):
-    if ( not check_bounds( w1, w2, w1p ) ):
-            return float('nan')
-    return ImVertUpDown( w1, w2, w1p ) - ImVertUpDown( w2, w1, w1p )
+    return ImVert( w1, w2, w1p, 0, 1, 0, 1 ) - ImVert( w2, w1, w1p, 1, 0, 0, 1 )
+    #return ImVert( w1, w2, w1p, 0, 0, 0, 0 ) - ImVert( w2, w1, w1p, 0, 0, 0, 0 )
 
 
 def plotVert( use_pl, zarr, string ):
@@ -226,7 +227,7 @@ pl.savefig("plots/Vert.png", dpi = 150)
 pl.figure(dpi=100) # Reset dpi to default
 pl.clf()
 
-shift=8
+shift=2
 
 #--- Plot Physical
 plotUpUpVertRePP( pl.subplot(2,3,1) )
