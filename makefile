@@ -1,5 +1,5 @@
 #--------------------------------------General------------------------------------------
-CXX 	:= g++-7 # This is the main compiler
+CXX 	:= clang++ # This is the main compiler
 #CXX 	:= icc # This is the main compiler
 SRCDIR 	:= src
 HEADDIR := include
@@ -23,7 +23,7 @@ RUNFLAGS := -O3 #						Compiler flags for quick compile and run
 OPTIMIZEFLAGS := -flto -march=native -O3 #			GCC Compiler flags for optimal speed
 #OPTIMIZEFLAGS := -O3 -fp-model fast=2 -xHost # -no-prec-div #	Intel Compiler flags for optimal speed
 H5LIB := $(shell h5c++ -show|cut -d ' ' -f2-) #			HDF5 libraries
-LIB := -lgtest -lpython2.7 -lboost_serialization -lboost_mpi -lboost_timer -lboost_program_options -ltriqs -lpomerol -lmpi -lmpi_cxx $(H5LIB) #		Library flags
+LIB := -lgtest -lpython2.7 -lboost_serialization -lboost_mpi -lboost_timer -lboost_program_options -ltriqs -lpomerol -lmpi $(H5LIB) #		Library flags
 INC := -I include/#			Additional include paths
 
 

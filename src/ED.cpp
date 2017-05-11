@@ -78,7 +78,7 @@ po::variables_map cmdline_params(int argc, char *argv[]) {
 
   define<int>(p, "calc_gf", false, "Calculate Green's functions");
   define<int>(p, "calc_2pgf", false, "Calculate 2-particle Green's functions");
-  define<int>(p, "n_iw", 32, "Number of positive fermionic Matsubara freq ( 4*n_iw for one-particle GF )");
+  define<int>(p, "n_iw", 32, "Number of positive fermionic Matsubara freq");
 
   define<double>(p, "2pgf.reduce_tol", 1e-12, "Energy resonance resolution in 2pgf");
   define<double>(p, "2pgf.coeff_tol", 1e-12, "Tolerance on nominators in 2pgf");
@@ -253,13 +253,14 @@ int main(int argc, char *argv[]) {
         IndexCombination2 ind2   = *it;
         const GreensFunction &GF = G(ind2);
 
-        mpi_cout << "Saving imfreq G" << ind2 << " on " << 4 * n_iw << " Matsubara freqs.\n";
+        mpi_cout << "Saving imfreq G" << ind2 << " on " << n_iw << " Matsubara freqs.\n";
 
-        auto G_iw                                   = gf<imfreq, scalar_valued>{{beta, Fermion, 4 * n_iw}};
+        auto G_iw                                   = gf<imfreq, matrix_valued>{{beta, Fermion, n_iw}, make_shape(1,1)};
         for (auto const &iw : G_iw.mesh()) G_iw[iw] = GF(iw);
 
         std::string ind_str = boost::lexical_cast<std::string>(ind2.Index1) + boost::lexical_cast<std::string>(ind2.Index2);
-        h5_write(h5file, "G_iw_" + ind_str, G_iw);
+        //h5_write(h5file, "G_iw_" + ind_str, G_iw);
+        h5_write(h5file, "G_iw", G_iw);
       }
 
     // Start Calculation of Two-particle Quantities ( chi4, chi3, chi2 )
@@ -317,13 +318,14 @@ int main(int argc, char *argv[]) {
       // Initialize chi4 container and write to file
       if (!comm.rank()) {
         mpi_cout << "Saving 2PGF " << index_comb << std::endl;
-        auto chi4  = gf<cartesian_product<imfreq, imfreq, imfreq>, scalar_valued>{{iw_mesh, iw_mesh, iw_mesh}};
+        auto chi4  = gf<cartesian_product<imfreq, imfreq, imfreq>, tensor_valued<4>>{{iw_mesh, iw_mesh, iw_mesh}, make_shape(1,1,1,1)};
         size_t idx = 0;
         for (auto const &iw1 : iw_mesh)
           for (auto const &iw2 : iw_mesh)
             for (auto const &iw3 : iw_mesh) chi4[{iw1, iw2, iw3}] = chi4_freq_data[idx++];
 
-        h5_write(h5file, "chi4_" + ind_str, chi4);
+        //h5_write(h5file, "chi4_" + ind_str, chi4);
+        h5_write(h5file, "G2_iw", chi4);
       }
 
       //// =============== CHI3 ===============
