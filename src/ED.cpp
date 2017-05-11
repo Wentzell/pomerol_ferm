@@ -1,6 +1,6 @@
 //
-// This file is a part of pomerol - a scientific ED code for obtaining 
-// properties of a Hubbard model on a finite-size lattice 
+// This file is a part of pomerol - a scientific ED code for obtaining
+// properties of a Hubbard model on a finite-size lattice
 //
 // Copyright (C) 2010-2014 Andrey Antipov <Andrey.E.Antipov@gmail.com>
 // Copyright (C) 2010-2014 Igor Krivenko <Igor.S.Krivenko@gmail.com>
@@ -18,325 +18,407 @@
 // You should have received a copy of the GNU General Public License
 // along with pomerol.  If not, see <http://www.gnu.org/licenses/>.
 
-
 /** \file prog/anderson.cpp
- ** \brief Diagonalization of the Hubbard 2d cluster with periodic boundary conditions
- **
- ** \author Andrey Antipov (Andrey.E.Antipov@gmail.com)
- */
+** \brief Diagonalization of the Anderson impurity model (1 impurity coupled to a set of non-interacting bath sites)
+**
+** \author Andrey Antipov (Andrey.E.Antipov@gmail.com)
+*/
 
-#pragma clang diagnostic ignored "-Wc++11-extensions"
-#pragma clang diagnostic ignored "-Wgnu"
-
-#include <boost/serialization/complex.hpp>
-#include <boost/serialization/vector.hpp>
-#include <boost/archive/text_oarchive.hpp>
-#include <boost/archive/text_iarchive.hpp>
+#include <boost/lexical_cast.hpp>
+#include <boost/program_options.hpp>
+#include <boost/mpi.hpp>
 
 #include <string>
 #include <iostream>
 #include <algorithm>
-#include <tclap/CmdLine.h>
-
-#include <cstdlib>
-#include <fstream>
 
 #include <pomerol.h>
-#include "mpi_dispatcher/mpi_dispatcher.hpp"
+#include <triqs/gfs.hpp>
+#include <translate.h>
 
-#include <def.h>
-#include <H5Tools.h>
-#include <grid.h>
+namespace po = boost::program_options;
 
 using namespace Pomerol;
-using namespace H5;
+using namespace triqs::gfs;
+using namespace triqs::arrays;
+using namespace triqs::utility;
+using namespace triqs::h5;
+using dcomplex = std::complex<double>;
 
-extern boost::mpi::environment env;
-boost::mpi::communicator comm;
+void print_section(const std::string &str, boost::mpi::communicator comm = boost::mpi::communicator());
 
-/* Auxiliary routines - implemented in the bottom. */
-bool compare(ComplexType a, ComplexType b);
-void print_section (const std::string& str);
-template <typename F1, typename F2>
-bool is_equal ( F1 x, F2 y, RealType tolerance = 1e-7);
-template <typename T1> void savetxt(std::string fname, T1 in);
-struct my_logic_error;
-double FMatsubara(int n, double beta){return M_PI/beta*(2.*n+1);}
-double BMatsubara(int n, double beta){return M_PI/beta*(2.*n);}
+#define mpi_cout                                                                                                                                     \
+  if (!comm.rank()) std::cout
 
-int job_to_ffreq_index(int job, int wfmax) { return -wfmax + job; }
+template <typename T> po::options_description define(po::options_description &opts, std::string name, T def_val, std::string desc) {
+  opts.add_options()(name.c_str(), po::value<T>()->default_value(T(def_val)), desc.c_str());
+  return opts;
+}
 
-int main(int argc, char* argv[])
-{
-   boost::mpi::environment env(argc,argv);
-   boost::mpi::communicator comm;
+template <typename T> po::options_description define_vec(po::options_description &opts, std::string name, T &&def_val, std::string desc) {
+  opts.add_options()(name.c_str(), po::value<T>()->multitoken()->default_value(T(def_val), ""), desc.c_str());
+  return opts;
+}
 
-   print_section("Dimer Model");
+template <typename... A, std::size_t... Is> auto _make_boost_tuple_impl(std::tuple<A...> const &tpl, std::index_sequence<Is...>) {
+  return boost::tuple<A...>{std::get<Is>(tpl)...};
+}
+template <typename... A> auto make_boost_tuple(std::tuple<A...> const &tpl) { return _make_boost_tuple_impl(tpl, std::index_sequence_for<A...>{}); }
 
-   int size_x, size_y;
-   RealType t, mu, U, beta, reduce_tol, coeff_tol;
-   bool calc_gf, calc_2pgf, cluster; 
-   int wf_max;
-   double eta, hbw, step; // for evaluation of GF on real axis 
+// Command Line Parser
+po::variables_map cmdline_params(int argc, char *argv[]) {
+  po::options_description p("ED Solver based on Pomerol and Triqs");
 
-   try { // command line parser
-      TCLAP::CmdLine cmd("Hubbard nxn diag", ' ', "");
-      TCLAP::ValueArg<RealType> U_arg("U","U","Value of U",true,10.0,"RealType",cmd);
-      TCLAP::ValueArg<RealType> mu_arg("","mu","Global chemical potential",false,0.0,"RealType",cmd);
-      TCLAP::ValueArg<RealType> t_arg("t","t","Value of t",false,1.0,"RealType",cmd);
+  define_vec<std::vector<double>>(p, "levels", {}, "Energy levels of the bath sites");
+  define_vec<std::vector<double>>(p, "hoppings", {}, "Hopping to the bath sites");
 
-      TCLAP::ValueArg<RealType> beta_arg("b","beta","Inverse temperature",true,100.,"RealType");
-      TCLAP::ValueArg<RealType> T_arg("T","T","Temperature",true,0.01,"RealType");
-      cmd.xorAdd(beta_arg,T_arg);
+  define<double>(p, "U", 1.0, "Value of U");
+  define<double>(p, "beta", 1.0, "Value of inverse temperature");
+  define<double>(p, "e0", 0.0, "Value of impurity energy level");
 
-      TCLAP::ValueArg<size_t> wf_arg("","wf","Number of positive fermionic Matsubara Freqs",false,64,"int",cmd);
+  define<int>(p, "calc_gf", false, "Calculate Green's functions");
+  define<int>(p, "calc_2pgf", false, "Calculate 2-particle Green's functions");
+  define<int>(p, "n_iw", 32, "Number of positive fermionic Matsubara freq ( 4*n_iw for one-particle GF )");
 
-      TCLAP::SwitchArg gf_arg("","calcgf","Calculate Green's functions",cmd, false);
-      TCLAP::SwitchArg twopgf_arg("","calc2pgf","Calculate 2-particle Green's functions",cmd, false);
-      TCLAP::ValueArg<RealType> reduce_tol_arg("","reducetol","Energy resonance resolution in 2pgf",false,1e-12,"RealType",cmd);
-      TCLAP::ValueArg<RealType> coeff_tol_arg("","coefftol","Total weight tolerance",false,1e-12,"RealType",cmd);
+  define<double>(p, "2pgf.reduce_tol", 1e-12, "Energy resonance resolution in 2pgf");
+  define<double>(p, "2pgf.coeff_tol", 1e-12, "Tolerance on nominators in 2pgf");
+  define<double>(p, "2pgf.multiterm_tol", 1e-12,
+                 "Minimal magnitude of the coefficient of a term to take it into account with respect to amount of terms");
+  define<size_t>(p, "2pgf.reduce_freq", 1e5, "How often to reduce terms in 2pgf");
+  define_vec<std::vector<size_t>>(p, "2pgf.indices", std::vector<size_t>({0, 0, 0, 0}), "2pgf index combination");
 
-      cluster = true; 
+  p.add_options()("help", "help");
 
-      TCLAP::ValueArg<RealType> eta_arg("","eta","Offset from the real axis for Green's function calculation",false,0.05,"RealType",cmd);
-      TCLAP::ValueArg<RealType> hbw_arg("D","hbw","Half-bandwidth. Default = U",false,0.0,"RealType",cmd);
-      TCLAP::ValueArg<RealType> step_arg("","step","Step on a real axis. Default : 0.01",false,0.01,"RealType",cmd);
+  po::variables_map vm;
+  po::store(po::command_line_parser(argc, argv).options(p).style(po::command_line_style::unix_style ^ po::command_line_style::allow_short).run(), vm);
 
-      cmd.parse( argc, argv ); // parse arguments
+  po::notify(vm);
 
-      U = U_arg.getValue();
-      mu = (mu_arg.isSet()?mu_arg.getValue():U/2);
-      boost::tie(t, beta, calc_gf, calc_2pgf, reduce_tol, coeff_tol) = boost::make_tuple( t_arg.getValue(), beta_arg.getValue(), 
-	    gf_arg.getValue(), twopgf_arg.getValue(), reduce_tol_arg.getValue(), coeff_tol_arg.getValue());
-      size_x = 2; size_y = 1; 
-      boost::tie(wf_max) = boost::make_tuple(wf_arg.getValue());
-      boost::tie(eta, hbw, step) = boost::make_tuple(eta_arg.getValue(), (hbw_arg.isSet()?hbw_arg.getValue():2.*U), step_arg.getValue());
-      calc_gf = calc_gf || calc_2pgf;
-   }
-   catch (TCLAP::ArgException &e)  // catch parsing exceptions
-   { std::cerr << "error: " << e.error() << " for arg " << e.argId() << std::endl; exit(1);}
-   catch (std::exception &e)  // catch standard exceptions
-   { std::cerr << "error: " << e.what() << std::endl; exit(1);}
+  if (vm.count("help")) {
+    std::cerr << p << "\n";
+    MPI_Finalize();
+    exit(0);
+  }
 
-   int L = size_x*size_y;
-   INFO("Diagonalization of " << L << "=" << size_x << "*" << size_y << " sites");
-   Lattice Lat;
+  return vm;
+}
 
-   /* Add sites */
-   std::vector<std::string> names(L);
-   auto SiteIndexF = [size_x](size_t x, size_t y){return y*size_x + x;};
-   for (size_t y=0; y<size_y; y++)
-      for (size_t x=0; x<size_x; x++)
-      {
-	 int i = SiteIndexF(x,y);
-	 names[i]="S"+std::to_string(i);
-	 Lat.addSite(new Lattice::Site(names[i],1,2));
-      };
+int main(int argc, char *argv[]) {
+  boost::mpi::environment env(argc, argv);
+  boost::mpi::communicator comm;
 
-   INFO("Sites");
-   Lat.printSites();
+  print_section("ED Solver based on Pomerol and Triqs");
 
-   /* Add hopping */
-   for (size_t x=0; x<size_x; x++) 
-      for (size_t y=0; y<size_y; y++) 
-      {
-	 auto pos = SiteIndexF(x,y);
-	 auto pos_right = SiteIndexF( (x+1) % size_x, y ); 
-	 auto pos_up = SiteIndexF( x, (y+1) % size_y ); 
+  // Define Model Parameters
+  RealType e0, U, beta;
+  bool calc_gf, calc_2pgf;
+  size_t L;
+  std::vector<double> levels;
+  std::vector<double> hoppings;
 
-	 if (x < size_x-1) LatticePresets::addHopping(&Lat, names[pos], names[pos_right], -t);
-	 else if(!cluster) LatticePresets::addHopping(&Lat, names[pos_right], names[pos], -t); // periodicity in x
-	    
-	 if (y < size_y-1) LatticePresets::addHopping(&Lat, names[pos], names[pos_up], -t);
-	 else if(!cluster) LatticePresets::addHopping(&Lat, names[pos_up], names[pos], -t); // periodicity in y
+  // Read command line arguments
+  po::variables_map p = cmdline_params(argc, argv);
+
+  std::tie(U, beta, e0, calc_gf, calc_2pgf) =
+     std::make_tuple(p["U"].as<double>(), p["beta"].as<double>(), p["e0"].as<double>(), p["calc_gf"].as<int>(), p["calc_2pgf"].as<int>());
+  calc_gf = calc_gf || calc_2pgf;
+
+  if (p.count("levels")) {
+    levels   = p["levels"].as<std::vector<double>>();
+    hoppings = p["hoppings"].as<std::vector<double>>();
+  }
+
+  if (levels.size() != hoppings.size()) {
+    MPI_Finalize();
+    throw(std::logic_error("number of levels != number of hoppings"));
+  }
+
+  L = levels.size();
+  mpi_cout << "Diagonalization of 1+" << L << " sites" << std::endl;
+
+  Lattice Lat;
+
+  // Add the Impurity Site
+  Lat.addSite(new Lattice::Site("A", 1, 2)); // ( Name, Orbital_degrees, Spin_degrees )
+  LatticePresets::addCoulombS(&Lat, "A", U, e0);
+
+  // Add the Bath Sites
+  std::vector<std::string> names(L);
+  for (size_t i = 0; i < L; i++) {
+    names[i] = "b" + std::to_string(i);
+    Lat.addSite(new Lattice::Site(names[i], 1, 2));
+    LatticePresets::addHopping(&Lat, "A", names[i], hoppings[i]);
+    LatticePresets::addLevel(&Lat, names[i], levels[i]);
+  };
+
+  // Print all Lattice Sites
+  int rank = comm.rank();
+  mpi_cout << "Sites" << std::endl;
+  if (!rank) Lat.printSites();
+
+  // Print all terms with 2 and 4 operators
+  if (!rank) {
+    mpi_cout << "Terms with 2 operators" << std::endl;
+    Lat.printTerms(2);
+
+    mpi_cout << "Terms with 4 operators" << std::endl;
+    Lat.printTerms(4);
+  };
+
+  // Create index space
+  IndexClassification IndexInfo(Lat.getSiteMap());
+  IndexInfo.prepare(false);
+  if (!rank) {
+    print_section("Indices");
+    IndexInfo.printIndices();
+  };
+  int index_size = IndexInfo.getIndexSize();
+
+  print_section("Matrix element storage");
+  IndexHamiltonian Storage(&Lat, IndexInfo);
+  Storage.prepare();
+
+  // Write down the Hamiltonian as a symbolic formula
+  print_section("Terms");
+  mpi_cout << Storage << std::endl;
+
+  // Find symmetries of the problem
+  Symmetrizer Symm(IndexInfo, Storage);
+  Symm.compute();
+
+  // Introduce Fock space and classify states to blocks
+  StatesClassification S(IndexInfo, Symm);
+  S.compute();
+
+  // Hamiltonian in the basis of Fock Space
+  Hamiltonian H(IndexInfo, Storage, S);
+  // enter the Hamiltonian matrices
+  H.prepare();
+  // compute eigenvalues and eigenvectors
+  H.compute();
+
+  DensityMatrix rho(S, H, beta); // create Density Matrix
+  rho.prepare();
+  rho.compute(); // evaluate thermal weights with respect to ground energy, i.e exp(-beta(e-e_0))/Z
+
+  ParticleIndex d0 = IndexInfo.getIndex("A", 0, down); // find the indices of the impurity, i.e. spin up index
+  ParticleIndex u0 = IndexInfo.getIndex("A", 0, up);
+
+  if (!rank) {
+    // get average total particle number
+    mpi_cout << "<N> = " << rho.getAverageOccupancy() << std::endl;
+    // get average energy
+    mpi_cout << "<H> = " << rho.getAverageEnergy() << std::endl;
+    // get double occupancy
+    mpi_cout << "<N_{" << IndexInfo.getInfo(u0) << "}N_{" << IndexInfo.getInfo(u0) << "}> = " << rho.getAverageDoubleOccupancy(u0, d0) << std::endl;
+    // get average total particle number per index
+    for (ParticleIndex i = 0; i < IndexInfo.getIndexSize(); i++) {
+      std::cout << "<N_{" << IndexInfo.getInfo(i) << "[" << i << "]}> = " << rho.getAverageOccupancy(i) << std::endl;
+    }
+    double n_av = rho.getAverageOccupancy();
+  }
+
+  // ======== Start Green's function calculation ========
+
+  // Container for c and c^+ in the eigenstate basis
+  FieldOperatorContainer Operators(IndexInfo, S, H);
+
+  if (calc_gf) {
+    int n_iw = p["n_iw"].as<int>();
+
+    // Open File for output
+    triqs::h5::file h5file("pomerol_out.h5", 'w');
+
+    print_section("1-Particle Green's function calculation");
+    std::set<ParticleIndex> f;            // a set of indices to evaluate the c and c^+ operators on
+    std::set<IndexCombination2> indices2; // a set of index pairs for the Green's function evalulation
+
+    // Take only impurity spin up and spin down indices
+    f.insert(u0);
+    f.insert(d0);
+    indices2.insert(IndexCombination2(d0, d0)); // evaluate only G_{\down \down}
+
+    Operators.prepareAll(f);
+    Operators.computeAll(); // evaluate c, c^+ for chosen indices
+
+    GFContainer G(IndexInfo, S, H, rho, Operators);
+
+    G.prepareAll(indices2); // Identify all non-vanishing block connections in the Green's function
+    G.computeAll();         // Evaluate all GF terms, i.e. resonances and weights of expressions in Lehmans representation of the Green's function
+
+    // Fill G_iw container and write to file
+    if (!comm.rank())
+      // Loop over all index pairs of the Green's function
+      for (std::set<IndexCombination2>::const_iterator it = indices2.begin(); it != indices2.end(); ++it) {
+        IndexCombination2 ind2   = *it;
+        const GreensFunction &GF = G(ind2);
+
+        mpi_cout << "Saving imfreq G" << ind2 << " on " << 4 * n_iw << " Matsubara freqs.\n";
+
+        auto G_iw                                   = gf<imfreq, scalar_valued>{{beta, Fermion, 4 * n_iw}};
+        for (auto const &iw : G_iw.mesh()) G_iw[iw] = GF(iw);
+
+        std::string ind_str = boost::lexical_cast<std::string>(ind2.Index1) + boost::lexical_cast<std::string>(ind2.Index2);
+        h5_write(h5file, "G_iw_" + ind_str, G_iw);
       }
 
-   /* Add interaction on each site*/
-   for (size_t i=0; i<L; i++) LatticePresets::addCoulombS(&Lat, names[i], U, -mu);
+    // Start Calculation of Two-particle Quantities ( chi4, chi3, chi2 )
+    if (calc_2pgf) {
+      print_section("2-Particle Green's function calculation (chi4)");
 
-   auto rank = comm.rank();
-   if (!rank) {
-      INFO("Terms with 2 operators");
-      Lat.printTerms(2);
+      std::vector<size_t> indices_2pgf = p["2pgf.indices"].as<std::vector<size_t>>();
+      if (indices_2pgf.size() != 4) throw std::logic_error("Need 4 indices for 2pgf");
 
-      INFO("Terms with 4 operators");
-      Lat.printTerms(4);
-   };
+      // a set of four indices to evaluate the 2pgf
+      IndexCombination4 index_comb(indices_2pgf[0], indices_2pgf[1], indices_2pgf[2], indices_2pgf[3]);
 
-   IndexClassification IndexInfo(Lat.getSiteMap());
-   IndexInfo.prepare(false); // Create index space
-   if (!rank) { print_section("Indices"); IndexInfo.printIndices(); };
-   auto index_size = IndexInfo.getIndexSize();
+      std::set<IndexCombination4> indices4;
+      // 2PGF = <T c c c^+ c^+>
+      indices4.insert(index_comb);
+      std::string ind_str = boost::lexical_cast<std::string>(index_comb.Index1) + boost::lexical_cast<std::string>(index_comb.Index2)
+         + boost::lexical_cast<std::string>(index_comb.Index3) + boost::lexical_cast<std::string>(index_comb.Index4);
 
-   print_section("Matrix element storage");
-   IndexHamiltonian Storage(&Lat,IndexInfo); 
-   Storage.prepare(); // Write down the Hamiltonian as a symbolic formula
-   print_section("Terms");
-   if (!rank) INFO(Storage);
+      AnnihilationOperator const &C1 = Operators.getAnnihilationOperator(index_comb.Index1);
+      AnnihilationOperator const &C2 = Operators.getAnnihilationOperator(index_comb.Index2);
+      CreationOperator const &CX3    = Operators.getCreationOperator(index_comb.Index3);
+      CreationOperator const &CX4    = Operators.getCreationOperator(index_comb.Index4);
+      TwoParticleGF G4(S, H, C1, C2, CX3, CX4, rho);
 
-   Symmetrizer Symm(IndexInfo, Storage);
-   Symm.compute(); // Find symmetries of the problem
+      /* Some knobs to make calc faster - the larger the values of tolerances, the faster is calc, but rounding errors may show up. */
+      /** A difference in energies with magnitude less than this value is treated as zero - resolution of energy resonances. */
+      G4.ReduceResonanceTolerance = p["2pgf.reduce_tol"].as<double>();
+      /** Minimal magnitude of the coefficient of a term to take it into account - resolution of thermal weight. */
+      G4.CoefficientTolerance = p["2pgf.coeff_tol"].as<double>();
+      /** Knob that controls the caching frequency. */
+      G4.ReduceInvocationThreshold = p["2pgf.reduce_freq"].as<size_t>();
+      /** Minimal magnitude of the coefficient of a term to take it into account with respect to amount of terms. */
+      G4.MultiTermCoefficientTolerance = p["2pgf.multiterm_tol"].as<double>();
 
-   StatesClassification S(IndexInfo,Symm); // Introduce Fock space and classify states to blocks
-   S.compute();
+      G4.prepare();
+      comm.barrier(); // MPI::BARRIER
 
-   Hamiltonian H(IndexInfo, Storage, S); // Hamiltonian in the basis of Fock Space
-   H.prepare(); // enter the Hamiltonian matrices
-   H.compute(); // compute eigenvalues and eigenvectors
+      // =============== CHI4 ===============
 
-   RealVectorType evals (H.getEigenValues());
-   std::sort(evals.data(), evals.data() + H.getEigenValues().size());
-   savetxt("spectrum.dat", evals); // dump eigenvalues
+      // Prepare frequency triples to be calculated
+      std::vector<boost::tuple<dcomplex, dcomplex, dcomplex>> freqs_2pgf;
+      freqs_2pgf.reserve(8 * n_iw * n_iw * n_iw);
 
-   DensityMatrix rho(S,H,beta); // create Density Matrix
-   rho.prepare();
-   rho.compute(); // evaluate thermal weights with respect to ground energy, i.e exp(-beta(e-e_0))/Z 
+      auto iw_mesh = gf_mesh<imfreq>{beta, Fermion, n_iw};
 
-   // Register indeces for preparation (f)
-   std::set<ParticleIndex> f; // a set of indices to evaluate c and c^+
-   for( int i = 0; i < IndexInfo.getIndexSize(); i++ )
-      f.insert(i);
+      for (auto const &iw1 : iw_mesh)
+        for (auto const &iw2 : iw_mesh)
+          for (auto const &iw3 : iw_mesh) freqs_2pgf.push_back(make_boost_tuple(translate<POMEROL, FERM>({iw1, iw3, iw2})));
 
-   // Green's function calculation starts here
-   FieldOperatorContainer Operators(IndexInfo, S, H); // Create a container for c and c^+ in the eigenstate basis
+      mpi_cout << "2PGF : " << freqs_2pgf.size() << " freqs to evaluate" << std::endl;
 
-   Operators.prepareAll(f);
-   Operators.computeAll(); // evaluate c, c^+ for chosen indices 
+      // Calculate chi4 based on the frequency triples
+      auto chi4_freq_data = G4.compute(true, freqs_2pgf, comm);
 
-   ParticleIndex d0 = IndexInfo.getIndex("S0",0,down); 
-   ParticleIndex u0 = IndexInfo.getIndex("S0",0,up);
+      // Initialize chi4 container and write to file
+      if (!comm.rank()) {
+        mpi_cout << "Saving 2PGF " << index_comb << std::endl;
+        auto chi4  = gf<cartesian_product<imfreq, imfreq, imfreq>, scalar_valued>{{iw_mesh, iw_mesh, iw_mesh}};
+        size_t idx = 0;
+        for (auto const &iw1 : iw_mesh)
+          for (auto const &iw2 : iw_mesh)
+            for (auto const &iw3 : iw_mesh) chi4[{iw1, iw2, iw3}] = chi4_freq_data[idx++];
 
-   INFO("<N> = " << rho.getAverageOccupancy()); // get average total particle number
-   INFO("<H> = " << rho.getAverageEnergy()); // get average energy
-   INFO("<N_{" << IndexInfo.getInfo(u0) << "}N_{"<< IndexInfo.getInfo(u0) << "}> = " << rho.getAverageDoubleOccupancy(u0,d0)); // get double occupancy
-   for (ParticleIndex i=0; i<IndexInfo.getIndexSize(); i++)
-      INFO("<N_{" << IndexInfo.getInfo(i) << "[" << i <<"]}> = " << rho.getAverageOccupancy(i)); // get average total particle number
-   savetxt("N_T.dat",rho.getAverageOccupancy());
-
-   if (calc_gf) {
-      INFO("1-particle Green's functions calc");
-      std::set<IndexCombination2> indices2; // a set of pairs of indices to evaluate Green's function
-
-      // Register indeces for 1p Green function
-      for ( int i = 0; i < L; i++ )
-	 for ( int j = 0; j < L; j++ )
-	 {
-	    ParticleIndex ind_i = IndexInfo.getIndex(names[i],0,up);
-	    ParticleIndex ind_j = IndexInfo.getIndex(names[j],0,up);
-	    indices2.insert(IndexCombination2(ind_i,ind_j));
-	 }
-
-      GFContainer G(IndexInfo,S,H,rho,Operators);
-
-      G.prepareAll(indices2); // identify all non-vanishing block connections in the Green's function
-      G.computeAll(); // Evaluate all GF terms, i.e. resonances and weights of expressions in Lehmans representation of the Green's function
-
-      gf_1p_t Giw( 4*wf_max, L ); 
-
-      if (!comm.rank()) // dump gf into a file
-      {
-	 std::cout << "Saving imfreq G on "<< 4*wf_max << " Matsubara freqs. " << std::endl;
-	 for (auto ind2 : indices2) // loops over all components (pairs of indices) of the Green's function 
-	 { 
-	    const GreensFunction & GF = G(ind2);
-
-	    // Save Matsubara GF on grid
-	    for (int wn = -4*wf_max; wn < 4*wf_max; wn++)	// Care for spin index!
-	       Giw[wn][0][ind2.Index1 / 2][ind2.Index2 / 2] = GF(I*FMatsubara(wn,beta)); 
-	 }
+        h5_write(h5file, "chi4_" + ind_str, chi4);
       }
 
-      H5File file( "output.h5", H5F_ACC_TRUNC );
-      Group grp_par( file.createGroup("/Params"));
-      write( U, grp_par, "UINT" ); 
-      write( beta, grp_par, "BETA" ); 
+      //// =============== CHI3 ===============
 
-      Group grp_giw( file.createGroup("/Giw") );
-      write( Giw, grp_giw, "" ); 
-      write( F_Grid( 4*wf_max, 2.0*PI / beta ), grp_giw );
+      //print_section("High-frequency asymptotics (chi3)");
 
-      // Start Two-particle GF calculation
+      //// Prepare frequency triples to be calculated
+      //std::vector<boost::tuple<dcomplex, dcomplex, dcomplex>> freqs_chi3_pp, freqs_chi3_ph, freqs_chi3_xph;
+      //freqs_chi3_pp.reserve(2 * n_iw * (2 * n_iw + 1));
+      //freqs_chi3_ph.reserve(2 * n_iw * (2 * n_iw + 1));
+      //freqs_chi3_xph.reserve(2 * n_iw * (2 * n_iw + 1));
 
-      if (calc_2pgf) {   
-	 print_section("2-Particle Green's function calc");
-	 std::set<IndexCombination4> indices4; // a set of four indices to evaluate the 2pgf
-	 // 2PGF = <T c c c^+ c^+>      i j k l
-	 for ( int i = 0; i < L; i++ )
-	    for ( int j = 0; j < L; j++ )
-	       for ( int k = 0; k < L; k++ )
-		  for ( int l = 0; l < L; l++ )
-		  {
-		     ParticleIndex ind_i = IndexInfo.getIndex(names[i],0,up);
-		     ParticleIndex ind_j = IndexInfo.getIndex(names[j],0,down);
-		     ParticleIndex ind_k = IndexInfo.getIndex(names[k],0,down);
-		     ParticleIndex ind_l = IndexInfo.getIndex(names[l],0,up);
-		     indices4.insert(IndexCombination4(ind_i, ind_j, ind_k, ind_l));
-		  }
+      //auto iOm_mesh = gf_mesh<imfreq>{beta, Boson, n_iw};
 
-	 TwoParticleGFContainer Chi4(IndexInfo,S,H,rho,Operators);
-	 /* Some knobs to make calc faster - the larger the values of tolerances, the faster is calc, but rounding errors may show up. */
-	 /**  Kronecker delta comparing two energies ... default machine precision */
-	 Chi4.KroneckerSymbolTolerance = 1e-14;
-	 /** A difference in energies with magnitude less than this value is treated as zero - resolution of energy resonances. */
-	 Chi4.ReduceResonanceTolerance = reduce_tol;
-	 /** Minimal magnitude of the coefficient of a term to take it into account - resolution of thermal weight. */
-	 Chi4.CoefficientTolerance = coeff_tol;
-	 /** Knob that controls the caching frequency. */
-	 Chi4.ReduceInvocationThreshold = 1e5;
-	 /** Minimal magnitude of the coefficient of a term to take it into account with respect to amount of terms. */
-	 Chi4.MultiTermCoefficientTolerance = 1e-12;
+      //for (auto const &iOm : iOm_mesh)
+        //for (auto const &iw : iw_mesh) {
+          //freqs_chi3_pp.push_back(make_boost_tuple(translate<POMEROL, PP>(chi3_to_chi4({iOm, iw}))));
+          //freqs_chi3_ph.push_back(make_boost_tuple(translate<POMEROL, PH>(chi3_to_chi4({iOm, iw}))));
+          //freqs_chi3_xph.push_back(make_boost_tuple(translate<POMEROL, XPH>(chi3_to_chi4({iOm, iw}))));
+        //}
 
-	 Chi4.prepareAll(indices4); // find all non-vanishing block connections inside 2pgf
+      //// Calculate chi3 in all channels based on the frequency triples
+      //auto chi3_pp_freq_data  = G4.compute(true, freqs_chi3_pp, comm);
+      //auto chi3_ph_freq_data  = G4.compute(true, freqs_chi3_ph, comm);
+      //auto chi3_xph_freq_data = G4.compute(true, freqs_chi3_xph, comm);
 
-	 bool clearTerms = false; // Set if terms are kept in memory NOT YET WORKING
+      //// Initialize chi3 containers and write to file
+      //if (!comm.rank()) {
+        //mpi_cout << "Saving chi3 " << index_comb << std::endl;
 
-	 // ! The most important routine - actually calculate the 2PGF
-	 Chi4.computeAll(clearTerms, comm, true); 
+        //auto chi3_pp_iw  = gf<cartesian_product<imfreq, imfreq>, scalar_valued>{{iOm_mesh, iw_mesh}};
+        //auto chi3_ph_iw  = gf<cartesian_product<imfreq, imfreq>, scalar_valued>{{iOm_mesh, iw_mesh}};
+        //auto chi3_xph_iw = gf<cartesian_product<imfreq, imfreq>, scalar_valued>{{iOm_mesh, iw_mesh}};
 
-	 gf_2p_t G2arr( wf_max, L ); 
+        //size_t idx = 0;
 
-	 for (auto ind : indices4) { // dump 2PGF into files - loop through 2pgf components
-	    std::string ind_str = std::to_string(ind.Index1 / 2) + std::to_string(ind.Index2 / 2) +std::to_string(ind.Index4 / 2) +std::to_string(ind.Index3 / 2);
-	    if (!comm.rank()) std::cout << "Saving 2PGF " << ind_str << std::endl;
-	    const TwoParticleGF &chi = Chi4(ind);
+        //for (auto const &iOm : iOm_mesh)
+          //for (auto const &iw : iw_mesh) {
+            //chi3_pp_iw[{iOm, iw}]  = chi3_pp_freq_data[idx];
+            //chi3_ph_iw[{iOm, iw}]  = chi3_ph_freq_data[idx];
+            //chi3_xph_iw[{iOm, iw}] = chi3_xph_freq_data[idx++];
+          //}
 
-	    for (int w1_index = -wf_max; w1_index<wf_max; w1_index++) // loop over second fermionic frequency 
-	       for (int w2_index = -wf_max; w2_index<wf_max; w2_index++) // loop over second fermionic frequency 
-		  for (int w1p_index = -wf_max; w1p_index<wf_max; w1p_index++) 
-		  { 
-		     int w2p_index = w1_index + w2_index - w1p_index;
-		     G2arr[w1_index][w2_index][w1p_index][0][0][0][ind.Index1 / 2][ind.Index2 / 2][ind.Index4 / 2][ind.Index3 / 2] = chi(I*FMatsubara( w1_index, beta ), I*FMatsubara( w2_index, beta ), I*FMatsubara( w2p_index, beta ));  
-		  }
-	 }
+        //h5_write(h5file, "chi3_pp_iw_" + ind_str, chi3_pp_iw);
+        //h5_write(h5file, "chi3_ph_iw_" + ind_str, chi3_ph_iw);
+        //h5_write(h5file, "chi3_xph_iw_" + ind_str, chi3_xph_iw);
+      //}
 
-	 Group grp_G2( file.createGroup("/G2") );
-	 write( G2arr, grp_G2, "" ); 
-	 write( F_Grid( wf_max, 2.0*PI / beta ), grp_G2 );
+      //// =============== CHI2 ===============
 
-      }
-   }
+      //print_section("High-frequency asymptotics (chi2)");
+
+      //// Prepare frequency triples to be calculated
+      //std::vector<boost::tuple<dcomplex, dcomplex, dcomplex>> freqs_chi2_pp, freqs_chi2_ph, freqs_chi2_xph;
+      //freqs_chi3_pp.reserve(2 * n_iw + 1);
+      //freqs_chi3_ph.reserve(2 * n_iw + 1);
+      //freqs_chi3_xph.reserve(2 * n_iw + 1);
+
+      //for (auto const &iOm : iOm_mesh) {
+        //freqs_chi2_pp.push_back(make_boost_tuple(translate<POMEROL, PP>(chi2_to_chi4(iOm))));
+        //freqs_chi2_ph.push_back(make_boost_tuple(translate<POMEROL, PH>(chi2_to_chi4(iOm))));
+        //freqs_chi2_xph.push_back(make_boost_tuple(translate<POMEROL, XPH>(chi2_to_chi4(iOm))));
+      //}
+
+      //// The most important routine - actually calculate the 2PGF
+      //auto chi2_pp_freq_data  = G4.compute(true, freqs_chi2_pp, comm);
+      //auto chi2_ph_freq_data  = G4.compute(true, freqs_chi2_ph, comm);
+      //auto chi2_xph_freq_data = G4.compute(true, freqs_chi2_xph, comm);
+
+      //// Initialize chi3 containers and write to file
+      //if (!comm.rank()) {
+        //mpi_cout << "Saving chi2 " << index_comb << std::endl;
+
+        //auto chi2_pp_iw  = gf<imfreq, scalar_valued>{iOm_mesh};
+        //auto chi2_ph_iw  = gf<imfreq, scalar_valued>{iOm_mesh};
+        //auto chi2_xph_iw = gf<imfreq, scalar_valued>{iOm_mesh};
+
+        //size_t idx = 0;
+
+        //for (auto const &iOm : iOm_mesh) {
+          //chi2_pp_iw[iOm]  = chi2_pp_freq_data[idx];
+          //chi2_ph_iw[iOm]  = chi2_ph_freq_data[idx];
+          //chi2_xph_iw[iOm] = chi2_xph_freq_data[idx];
+        //}
+
+        //h5_write(h5file, "chi2_pp_iw_" + ind_str, chi2_pp_iw);
+        //h5_write(h5file, "chi2_ph_iw_" + ind_str, chi2_ph_iw);
+        //h5_write(h5file, "chi2_xph_iw_" + ind_str, chi2_xph_iw);
+      //}
+    }
+  }
 }
 
-bool compare(ComplexType a, ComplexType b)
-{
-   return abs(a-b) < 1e-5;
+void print_section(const std::string &str, boost::mpi::communicator comm) {
+  mpi_cout << std::string(str.size(), '=') << std::endl;
+  mpi_cout << str << std::endl;
+  mpi_cout << std::string(str.size(), '=') << std::endl;
 }
-
-void print_section (const std::string& str)
-{
-   if (!comm.rank()) { 
-      std::cout << std::string(str.size(),'=') << std::endl;
-      std::cout << str << std::endl;
-      std::cout << std::string(str.size(),'=') << std::endl;
-   };
-}
-
-   template <typename F1, typename F2>
-bool is_equal ( F1 x, F2 y, RealType tolerance)
-{
-   return (std::abs(x-y)<tolerance);
-}
-
-template <typename T1> void savetxt(std::string fname, T1 in){std::ofstream out(fname); out << in << std::endl; out.close();};
-
-struct my_logic_error : public std::logic_error { my_logic_error (const std::string& what_arg):logic_error(what_arg){}; };

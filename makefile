@@ -1,5 +1,5 @@
 #--------------------------------------General------------------------------------------
-CXX 	:= g++ # This is the main compiler
+CXX 	:= g++-7 # This is the main compiler
 #CXX 	:= icc # This is the main compiler
 SRCDIR 	:= src
 HEADDIR := include
@@ -15,7 +15,7 @@ OBJECTS := $(patsubst $(SRCDIR)/%,$(BUILDDIR)/%,$(SOURCES:.$(SRCEXT)=.o))
 
 #--------------------------------------Compiler settings------------------------------------------
 
-CFLAGS += -std=c++11 -D OPENMP -fopenmp #			General compiler flags
+CFLAGS += -std=c++1y -D OPENMP -fopenmp #			General compiler flags
 CFLAGS += -D BOOST_DISABLE_ASSERTS #				Disable boost assert checks
 DBFLAGS := -O2 -g #						Compiler flags for debugging
 PROFFLAGS := -O2 -g #						Compiler flags for profiling
@@ -23,8 +23,8 @@ RUNFLAGS := -O3 #						Compiler flags for quick compile and run
 OPTIMIZEFLAGS := -flto -march=native -O3 #			GCC Compiler flags for optimal speed
 #OPTIMIZEFLAGS := -O3 -fp-model fast=2 -xHost # -no-prec-div #	Intel Compiler flags for optimal speed
 H5LIB := $(shell h5c++ -show|cut -d ' ' -f2-) #			HDF5 libraries
-LIB :=  -lmpi -lboost_serialization -lboost_mpi -lboost_timer $(H5LIB) -lpomerol -lmpi_cxx #		Library flags
-INC := -I include -I/opt/pomerol/include -I/usr/include/hdf5/serial #			Additional include paths
+LIB := -lgtest -lpython2.7 -lboost_serialization -lboost_mpi -lboost_timer -lboost_program_options -ltriqs -lpomerol -lmpi -lmpi_cxx $(H5LIB) #		Library flags
+INC := -I include/#			Additional include paths
 
 
 #--------------------------------------Targets ------------------------------------------
